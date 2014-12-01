@@ -11,6 +11,7 @@ static const EVP_MD* evp_md = NULL;
 
 #define AWS_S3_VARIABLE "s3_auth_token"
 #define AWS_DATE_VARIABLE "aws_date"
+#define AWS_SECURITY_TOKEN "aws_token"
 
 static void* ngx_http_aws_auth_create_loc_conf(ngx_conf_t *cf);
 static char* ngx_http_aws_auth_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
@@ -28,6 +29,7 @@ typedef struct {
 typedef struct {
     ngx_str_t access_key;
     ngx_str_t secret;
+    ngx_str_t security_token;
     ngx_str_t s3_bucket;
     ngx_str_t chop_prefix;
     ngx_http_aws_auth_script_t *s3_bucket_script;
@@ -74,6 +76,13 @@ static ngx_command_t  ngx_http_aws_auth_commands[] = {
       ngx_conf_set_str_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_aws_auth_conf_t, secret),
+      NULL },
+
+    { ngx_string("aws_security_token"),
+      NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_aws_auth_conf_t, security_token),
       NULL },
 
     { ngx_string("s3_bucket"),
@@ -292,6 +301,7 @@ ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr) {
         }
     }
 
+    /* JYOUNGS- comment this out to not add x-amz-date to the signature */
     h = ngx_array_push(v);
     if (h == NULL) {
         return NGX_ERROR;
@@ -305,6 +315,27 @@ ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr) {
     h->value.data  = val;
     h->value.len  = ngx_cached_http_time.len;
     lenall += h->key.len + h->value.len + 2;
+    /**/
+
+    /* JYOUNGS START: here?: x-amz-security-token = security_token */
+    ngx_http_aws_auth_conf_t *aws_conf;
+    aws_conf = ngx_http_get_module_loc_conf(r, ngx_http_aws_auth_module);
+
+    if( aws_conf->security_token.len > 0 ) {
+        h = ngx_array_push(v);
+        if (h == NULL) {
+            return NGX_ERROR;
+        }
+
+        ngx_str_t amz_token = ngx_string("x-amz-security-token");
+        h->key.data = amz_token.data;
+        h->key.len = amz_token.len;
+        h->value.data = aws_conf->security_token.data;
+        h->value.len = aws_conf->security_token.len;
+        lenall += h->key.len + h->value.len + 2;
+    }
+    /* JYOUNGS END */
+
 
     ngx_qsort(v->elts, (size_t) v->nelts, sizeof(ngx_table_elt_t), ngx_http_cmp_hnames);
 
@@ -410,24 +441,42 @@ ngx_http_aws_auth_get_canon_resource(ngx_http_request_t *r, ngx_str_t *retstr) {
         *c_args_cur = '\0';
     } 
 
-    uri_len = ngx_strlen(uri);
-    u_char *ret = ngx_palloc(r->pool, uri_len + aws_conf->s3_bucket.len + sizeof("/") + c_args_len + 1); 
-    u_char *cur = ret; 
-    cur = ngx_cpystrn(cur, (u_char *)"/", sizeof("/"));
-    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "bucket: %V", &aws_conf->s3_bucket);
-    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "uri:    %s", uri);
-    cur = ngx_cpystrn(cur, aws_conf->s3_bucket.data, aws_conf->s3_bucket.len + 1);
-    cur = ngx_cpystrn(cur, uri, uri_len + 1);
-      
-    if ( c_args_len ) {
-        ngx_memcpy(cur, c_args, c_args_len + 1);
-        ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "args: %s", c_args);
+    // JYOUNGS: idk if this should just all be removed, or if c_args is something important 
+    if(  aws_conf->s3_bucket.len > 0 ){
+        uri_len = ngx_strlen(uri);
+        u_char *ret = ngx_palloc(r->pool, uri_len + aws_conf->s3_bucket.len + sizeof("/") + c_args_len + 1); 
+        u_char *cur = ret; 
+        cur = ngx_cpystrn(cur, (u_char *)"/", sizeof("/"));
+        ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "bucket: %V", &aws_conf->s3_bucket);
+        ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "uri:    %s", uri);
+        cur = ngx_cpystrn(cur, aws_conf->s3_bucket.data, aws_conf->s3_bucket.len + 1);
+        cur = ngx_cpystrn(cur, uri, uri_len + 1);
+          
+        if ( c_args_len ) {
+            ngx_memcpy(cur, c_args, c_args_len + 1);
+            ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "args: %s", c_args);
+        }
+        *(cur+c_args_len) = '\0';
+        retstr->data = ret;
+        retstr->len = sizeof("/") - 1 + uri_len + aws_conf->s3_bucket.len + c_args_len;
+        ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "normalized resources: %V", retstr);
+    } else {
+        uri_len = ngx_strlen(uri);
+        u_char *ret = ngx_palloc(r->pool, uri_len + c_args_len + 1); 
+        u_char *cur = ret; 
+        //ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "bucket: %V", &aws_conf->s3_bucket);
+        ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "uri:    %s", uri);
+        cur = ngx_cpystrn(cur, uri, uri_len + 1);
+          
+        if ( c_args_len ) {
+            ngx_memcpy(cur, c_args, c_args_len + 1);
+            ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "args: %s", c_args);
+        }
+        *(cur+c_args_len) = '\0';
+        retstr->data = ret;
+        retstr->len = uri_len + c_args_len;
+        ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "normalized resources: %V", retstr);
     }
-    *(cur+c_args_len) = '\0';
-    retstr->data = ret;
-    retstr->len = sizeof("/") - 1 + uri_len + aws_conf->s3_bucket.len + c_args_len;
-    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "normalized resources: %V", retstr);
-
     return NGX_OK;
 }
 
@@ -464,6 +513,23 @@ ngx_http_aws_auth_sgn_newline(ngx_array_t* to_sign){
     }
     el_sign->data = (u_char *)"\n";
     el_sign->len  = 1;
+    return NGX_OK;
+}
+
+static ngx_int_t
+ngx_http_aws_auth_variable_token(ngx_http_request_t *r, ngx_http_variable_value_t *v,
+    uintptr_t data)
+{
+    ngx_http_aws_auth_conf_t *aws_conf;
+    aws_conf = ngx_http_get_module_loc_conf(r, ngx_http_aws_auth_module);
+    if (ngx_http_aws_auth_get_dynamic_variables(r) != NGX_OK) {
+        return NGX_ERROR;
+    }
+    v->len = aws_conf->security_token.len;
+    v->data = aws_conf->security_token.data;
+    v->valid = 1;
+    v->no_cacheable = 0;
+    v->not_found = 0;
     return NGX_OK;
 }
 
@@ -537,7 +603,10 @@ ngx_http_aws_auth_variable_s3(ngx_http_request_t *r, ngx_http_variable_value_t *
         el_sign->len  = r->headers_in.content_type->value.len;
         lenall += el_sign->len;
     }
+    //Still adding new line...
     ngx_http_aws_auth_sgn_newline(to_sign);
+    /* JYOUNGS: Since we are always going to include x-amz-date - this shouldn't be part of the signature
+    
     ngx_str_t h_date = ngx_string("http_date");
     if (ngx_http_variable_unknown_header(val, &h_date, &r->headers_in.headers.part, sizeof("http_")-1) == NGX_OK) {
         if (val->not_found == 0) {
@@ -551,6 +620,7 @@ ngx_http_aws_auth_variable_s3(ngx_http_request_t *r, ngx_http_variable_value_t *
             lenall += el_sign->len;
         }
     }
+    */
 
     ngx_http_aws_auth_sgn_newline(to_sign);
 
@@ -635,6 +705,9 @@ static ngx_http_variable_t  ngx_http_aws_auth_vars[] = {
 
     { ngx_string(AWS_DATE_VARIABLE), NULL,
       ngx_http_aws_auth_variable_date, 0, NGX_HTTP_VAR_CHANGEABLE, 0 },
+
+    { ngx_string(AWS_SECURITY_TOKEN), NULL,
+      ngx_http_aws_auth_variable_token, 0, NGX_HTTP_VAR_CHANGEABLE, 0 },
 
     { ngx_null_string, NULL, NULL, 0, 0, 0 }
 };

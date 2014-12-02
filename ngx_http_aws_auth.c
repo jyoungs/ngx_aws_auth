@@ -30,6 +30,7 @@ typedef struct {
     ngx_str_t access_key;
     ngx_str_t secret;
 
+    ngx_int_t inbound_auth_disabled;
     ngx_str_t inbound_access_key1;
     ngx_str_t inbound_secret1;
     ngx_str_t inbound_access_key2;
@@ -82,6 +83,13 @@ static ngx_command_t  ngx_http_aws_auth_commands[] = {
       ngx_conf_set_str_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_aws_auth_conf_t, secret),
+      NULL },
+
+    { ngx_string("inbound_auth_disabled"),
+      NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_aws_auth_conf_t, inbound_auth_disabled),
       NULL },
 
     { ngx_string("inbound_aws_access_key1"),
@@ -264,6 +272,7 @@ ngx_http_aws_auth_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_http_aws_auth_conf_t *prev = parent;
     ngx_http_aws_auth_conf_t *conf = child;
 
+    ngx_conf_merge_value(conf->inbound_auth_disabled, prev->inbound_auth_disabled, 1)
     ngx_conf_merge_str_value(conf->access_key, prev->access_key, "");
     ngx_conf_merge_str_value(conf->secret, prev->secret, "");
     ngx_conf_merge_str_value(conf->inbound_access_key1, prev->inbound_access_key1, "");
@@ -779,17 +788,19 @@ ngx_http_aws_auth_variable_s3(ngx_http_request_t *r, ngx_http_variable_value_t *
     unsigned int      md_len;
     unsigned char     md[EVP_MAX_MD_SIZE];
 
-    ngx_int_t validate_result;
-    validate_result = validate_original_auth( r, v, data );
-    if( validate_result != NGX_OK ) {
-        return NGX_ERROR;
-    }
-
     aws_conf = ngx_http_get_module_loc_conf(r, ngx_http_aws_auth_module);
     if (ngx_http_aws_auth_get_dynamic_variables(r) != NGX_OK) {
         return NGX_ERROR;
     }
 
+    if(!aws_conf->inbound_auth_disabled) {
+        ngx_int_t validate_result;
+        validate_result = validate_original_auth( r, v, data );
+        if( validate_result != NGX_OK ) {
+            return NGX_ERROR;
+        }
+    }
+    
     /* 
      *   This Block of code added to deal with paths that are not on the root -
      *   that is, via proxy_pass that are being redirected and the base part of 

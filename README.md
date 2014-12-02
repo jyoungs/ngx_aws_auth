@@ -7,30 +7,22 @@ Implements proxying of authenticated requests to S3.
   server {
     listen     8000;
 
-    location / {
-      proxy_pass http://your_s3_bucket.s3.amazonaws.com;
+    location /fw-pub-pkgs {
+      proxy_pass https://s3.amazonaws.com; #also works with HTTP
 
-      aws_access_key your_aws_access_key;
-      aws_secret_key the_secret_associated_with_the_above_access_key;
-      s3_bucket your_s3_bucket;
+      inbound_aws_access_key 01234567890123456789;
+      inbound_aws_secret_key 0123456789012345678901234567890123456789;
 
-      proxy_set_header Authorization $s3_auth_token;
-      proxy_set_header x-amz-date $aws_date;
-    }
-
-    # This is an example that does not use the server root for the proxy root
-	location /myfiles {
-      proxy_pass http://your_s3_bucket.s3.amazonaws.com/;
-
-      aws_access_key your_aws_access_key;
-      aws_secret_key the_secret_associated_with_the_above_access_key;
-      s3_bucket your_s3_bucket;
-      chop_prefix /myfiles; # Take out this part of the URL before signing it, since '/myfiles' will not be part of the URI sent to Amazon  
-
+      aws_access_key INSERT_ACCESSKEY_HERE;
+      aws_secret_key INSERT_SECRETKEY_HERE;
+      #To use IAM Role/STS, insert the token and uncomment x-amz-security-token header below
+      #aws_security_token 'INSERT_TOKEN_HERE';
 
       proxy_set_header Authorization $s3_auth_token;
       proxy_set_header x-amz-date $aws_date;
-    }
+      #proxy_set_header x-amz-security-token $aws_token;
+
+  }
 
   }
 ```

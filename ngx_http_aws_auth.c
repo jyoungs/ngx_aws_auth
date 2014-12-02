@@ -299,7 +299,7 @@ ngx_http_cmp_hnames(const void *one, const void *two) {
 }
 
 static ngx_int_t
-ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr, _Bool add_amz_date) {
+ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr, _Bool update_for_outbound) {
     ngx_array_t       *v;
     ngx_list_part_t   *part;
     ngx_table_elt_t   *header, *el, *h;
@@ -350,7 +350,7 @@ ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr, _B
 
     //Add x-amz-date to the header list
     //Expect to do this to generate the forward request, but not validating inbound requests
-    if( add_amz_date ) {
+    if( update_for_outbound ) {
         h = ngx_array_push(v);
         if (h == NULL) {
             return NGX_ERROR;
@@ -369,7 +369,7 @@ ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr, _B
     ngx_http_aws_auth_conf_t *aws_conf;
     aws_conf = ngx_http_get_module_loc_conf(r, ngx_http_aws_auth_module);
 
-    if( aws_conf->security_token.len > 0 ) {
+    if( update_for_outbound && aws_conf->security_token.len > 0 ) {
         h = ngx_array_push(v);
         if (h == NULL) {
             return NGX_ERROR;

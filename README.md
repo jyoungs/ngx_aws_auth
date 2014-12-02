@@ -47,6 +47,11 @@ Implements proxying of authenticated requests to S3.
   }
 ```
 
+Sample Boto connection:
+```
+from boto.s3.connection import S3Connection
+conn = S3Connection(access_key, secret_key, host=proxy_endpoint, is_secure=False, calling_format=boto.s3.connection.OrdinaryCallingFormat())
+```
 
 
 Request signing & Amazon Cloudfront Service

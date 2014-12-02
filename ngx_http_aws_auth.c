@@ -29,6 +29,10 @@ typedef struct {
 typedef struct {
     ngx_str_t access_key;
     ngx_str_t secret;
+
+    ngx_str_t inbound_access_key;
+    ngx_str_t inbound_secret;
+
     ngx_str_t security_token;
     ngx_str_t s3_bucket;
     ngx_str_t chop_prefix;
@@ -76,6 +80,20 @@ static ngx_command_t  ngx_http_aws_auth_commands[] = {
       ngx_conf_set_str_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_aws_auth_conf_t, secret),
+      NULL },
+
+    { ngx_string("inbound_aws_access_key"),
+      NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_aws_auth_conf_t, inbound_access_key),
+      NULL },
+
+    { ngx_string("inbound_aws_secret_key"),
+      NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_aws_auth_conf_t, inbound_secret),
       NULL },
 
     { ngx_string("aws_security_token"),
@@ -232,6 +250,8 @@ ngx_http_aws_auth_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
 
     ngx_conf_merge_str_value(conf->access_key, prev->access_key, "");
     ngx_conf_merge_str_value(conf->secret, prev->secret, "");
+    ngx_conf_merge_str_value(conf->inbound_access_key, prev->inbound_access_key, "");
+    ngx_conf_merge_str_value(conf->inbound_secret, prev->inbound_secret, "");
     ngx_conf_merge_str_value(conf->chop_prefix, prev->chop_prefix, "");
 
     return NGX_CONF_OK;
@@ -252,7 +272,7 @@ ngx_http_cmp_hnames(const void *one, const void *two) {
 }
 
 static ngx_int_t
-ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr) {
+ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr, _Bool add_amz_date) {
     ngx_array_t       *v;
     ngx_list_part_t   *part;
     ngx_table_elt_t   *header, *el, *h;
@@ -301,23 +321,24 @@ ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr) {
         }
     }
 
-    /* JYOUNGS- comment this out to not add x-amz-date to the signature */
-    h = ngx_array_push(v);
-    if (h == NULL) {
-        return NGX_ERROR;
+    //Add x-amz-date to the header list
+    //Expect to do this to generate the forward reqest, but not valiidating inbound requests
+    if( add_amz_date ) {
+        h = ngx_array_push(v);
+        if (h == NULL) {
+            return NGX_ERROR;
+        }
+
+        ngx_str_t amz_date = ngx_string("x-amz-date");
+        u_char * val  = ngx_palloc(r->pool, ngx_cached_http_time.len + 1);
+        ngx_memcpy(val, ngx_cached_http_time.data, ngx_cached_http_time.len);
+        h->key.data = amz_date.data;
+        h->key.len  = amz_date.len;
+        h->value.data  = val;
+        h->value.len  = ngx_cached_http_time.len;
+        lenall += h->key.len + h->value.len + 2;
     }
-
-    ngx_str_t amz_date = ngx_string("x-amz-date");
-    u_char * val  = ngx_palloc(r->pool, ngx_cached_http_time.len + 1);
-    ngx_memcpy(val, ngx_cached_http_time.data, ngx_cached_http_time.len);
-    h->key.data = amz_date.data;
-    h->key.len  = amz_date.len;
-    h->value.data  = val;
-    h->value.len  = ngx_cached_http_time.len;
-    lenall += h->key.len + h->value.len + 2;
-    /**/
-
-    /* JYOUNGS START: here?: x-amz-security-token = security_token */
+    
     ngx_http_aws_auth_conf_t *aws_conf;
     aws_conf = ngx_http_get_module_loc_conf(r, ngx_http_aws_auth_module);
 
@@ -358,7 +379,6 @@ ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr) {
 
     return NGX_OK;
 }
-
 
 /* copy paste from ngx_http_arg */
 ngx_int_t
@@ -442,7 +462,7 @@ ngx_http_aws_auth_get_canon_resource(ngx_http_request_t *r, ngx_str_t *retstr) {
     } 
 
     // JYOUNGS: idk if this should just all be removed, or if c_args is something important 
-    if(  aws_conf->s3_bucket.len > 0 ){
+    if( aws_conf->s3_bucket.len > 0 ){
         uri_len = ngx_strlen(uri);
         u_char *ret = ngx_palloc(r->pool, uri_len + aws_conf->s3_bucket.len + sizeof("/") + c_args_len + 1); 
         u_char *cur = ret; 
@@ -534,9 +554,26 @@ ngx_http_aws_auth_variable_token(ngx_http_request_t *r, ngx_http_variable_value_
 }
 
 static ngx_int_t
-ngx_http_aws_auth_variable_s3(ngx_http_request_t *r, ngx_http_variable_value_t *v,
-    uintptr_t data)
+validate_original_auth(ngx_http_request_t *r, ngx_http_variable_value_t *v, uintptr_t data)
 {
+    // Locate the inbound signiture header
+    ngx_http_variable_value_t  *inbound_auth;
+    inbound_auth = ngx_palloc(r->pool, sizeof(ngx_http_variable_value_t));
+    if (inbound_auth == NULL) {
+        return NGX_ENOMEM;
+    }
+    ngx_str_t h_auth = ngx_string("http_authorization");
+    if (ngx_http_variable_unknown_header(inbound_auth, &h_auth, &r->headers_in.headers.part, sizeof("http_")-1) == NGX_OK) {
+        if (inbound_auth->not_found == 0) {
+            ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "Inbound Authorization: %s", inbound_auth->data);
+        }
+        else {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "No inbound uthorization header found");
+            return NGX_ERROR;
+        }
+    }
+
+    //Calculate the expected signature
     ngx_http_aws_auth_conf_t *aws_conf;
     ngx_array_t       *to_sign;
     ngx_str_t         *el_sign, *el;
@@ -605,8 +642,176 @@ ngx_http_aws_auth_variable_s3(ngx_http_request_t *r, ngx_http_variable_value_t *
     }
     //Still adding new line...
     ngx_http_aws_auth_sgn_newline(to_sign);
+    // JYOUNGS: Since we are always going to include x-amz-date - this shouldn't be part of the signature
+
+    ngx_str_t h_date = ngx_string("http_date");
+    if (ngx_http_variable_unknown_header(val, &h_date, &r->headers_in.headers.part, sizeof("http_")-1) == NGX_OK) {
+        if (val->not_found == 0) {
+            ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "Date: %s", val->data);
+            el_sign = ngx_array_push(to_sign);
+            if (el_sign == NULL) {
+                return NGX_ERROR;
+            }
+            el_sign->data = val->data;
+            el_sign->len  = val->len;
+            lenall += el_sign->len;
+        }
+    }
+    //*/
+
+    ngx_http_aws_auth_sgn_newline(to_sign);
+
+    el_sign = ngx_array_push(to_sign);
+    if (el_sign == NULL) {
+        return NGX_ERROR;
+    }
+    ngx_http_aws_auth_get_canon_headers(r, el_sign, 0);
+    lenall += el_sign->len;
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "normalized: %V", el_sign);
+
+    el_sign = ngx_array_push(to_sign);
+    if (el_sign == NULL) {
+        return NGX_ERROR;
+    }
+    ngx_http_aws_auth_get_canon_resource(r, el_sign);
+    lenall += el_sign->len;
+    el = to_sign->elts;
+
+    lenall += 4; //newlines 
+    u_char * str_to_sign = ngx_palloc(r->pool, lenall + 50);
+    int offset = 0;
+    for (i = 0; i < to_sign->nelts ; i++) {
+        ngx_memcpy(str_to_sign + offset, el[i].data, el[i].len);
+        offset += el[i].len;
+    }
+    *(str_to_sign+offset) = '\0';
+
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,"String to sign:%s",str_to_sign);
+
+
+    if (evp_md==NULL)
+    {
+       evp_md = EVP_sha1();
+    }
+
+    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
+                       "aws string being signed BEGIN:\n%s\naws string being signed END", str_to_sign);
+
+    HMAC(evp_md, aws_conf->inbound_secret.data, aws_conf->inbound_secret.len, str_to_sign, ngx_strlen(str_to_sign), md, &md_len);
+
+    BIO* b64 = BIO_new(BIO_f_base64());
+    BIO* bmem = BIO_new(BIO_s_mem());  
+    b64 = BIO_push(b64, bmem);
+    BIO_write(b64, md, md_len);
+    (void)BIO_flush(b64);
+    BUF_MEM *bptr; 
+    BIO_get_mem_ptr(b64, &bptr);
+
+    ngx_memcpy(str_to_sign, bptr->data, bptr->length-1);
+    str_to_sign[bptr->length-1]='\0';
+
+    BIO_free_all(b64);
+
+    u_char *signature = ngx_palloc(r->pool,100 + aws_conf->inbound_access_key.len);
+    ngx_sprintf(signature, "AWS %V:%s%Z", &aws_conf->inbound_access_key, str_to_sign);
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,"Validation Signature: %s",signature);
+
+    v->len = ngx_strlen(signature);
+    v->data = signature;
+    v->valid = 1;
+    v->no_cacheable = 0;
+    v->not_found = 0;
+
+    if(ngx_strcasecmp(inbound_auth->data, signature) != 0){
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,"Validation signature is not correct");
+        return NGX_ERROR;
+    }
+
+    return NGX_OK;    
+}
+
+
+static ngx_int_t
+ngx_http_aws_auth_variable_s3(ngx_http_request_t *r, ngx_http_variable_value_t *v,
+    uintptr_t data)
+{
+    ngx_http_aws_auth_conf_t *aws_conf;
+    ngx_array_t       *to_sign;
+    ngx_str_t         *el_sign, *el;
+    ngx_uint_t        lenall, i;
+    unsigned int      md_len;
+    unsigned char     md[EVP_MAX_MD_SIZE];
+
+    ngx_int_t validate_result;
+    validate_result = validate_original_auth( r, v, data );
+    if( validate_result != NGX_OK ) {
+        return NGX_ERROR;
+    }
+
+    aws_conf = ngx_http_get_module_loc_conf(r, ngx_http_aws_auth_module);
+    if (ngx_http_aws_auth_get_dynamic_variables(r) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    /* 
+     *   This Block of code added to deal with paths that are not on the root -
+     *   that is, via proxy_pass that are being redirected and the base part of 
+     *   the proxy url needs to be taken off the beginning of the URI in order 
+     *   to sign it correctly.
+    */
+
+    to_sign = ngx_array_create(r->pool, 10, sizeof(ngx_str_t));
+    if (to_sign == NULL) {
+        return NGX_ERROR;
+    }
+
+    el_sign = ngx_array_push(to_sign);
+    if (el_sign == NULL) {
+        return NGX_ERROR;
+    }
+
+    lenall = 0;
+    el_sign->data = r->method_name.data;
+    el_sign->len  = r->method_name.len;
+    lenall += el_sign->len;
+    ngx_http_aws_auth_sgn_newline(to_sign);
+
+    ngx_http_variable_value_t  *val;
+    val = ngx_palloc(r->pool, sizeof(ngx_http_variable_value_t));
+    if (val == NULL) {
+        return NGX_ENOMEM;
+    }
+    ngx_str_t h_name = ngx_string("http_content_md5");
+    if (ngx_http_variable_unknown_header(val, &h_name, &r->headers_in.headers.part, sizeof("http_")-1) == NGX_OK){
+        if (val->not_found == 0) {
+            ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "Content-MD5: %s", val->data);
+            el_sign = ngx_array_push(to_sign);
+            if (el_sign == NULL) {
+                return NGX_ERROR;
+            }
+            el_sign->data = val->data;
+            el_sign->len  = val->len;
+            lenall += el_sign->len;
+        }
+    }
+
+    ngx_http_aws_auth_sgn_newline(to_sign);
+
+    if (r->headers_in.content_type != NULL) {
+        ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "content-type: %V", &r->headers_in.content_type->value);
+        el_sign = ngx_array_push(to_sign);
+        if (el_sign == NULL) {
+            return NGX_ERROR;
+        }
+        el_sign->data = r->headers_in.content_type->value.data;
+        el_sign->len  = r->headers_in.content_type->value.len;
+        lenall += el_sign->len;
+    }
+    //Still adding new line...
+    ngx_http_aws_auth_sgn_newline(to_sign);
     /* JYOUNGS: Since we are always going to include x-amz-date - this shouldn't be part of the signature
-    
+    //http://docs.aws.amazon.com/general/latest/gr/sigv4-date-handling.html
+
     ngx_str_t h_date = ngx_string("http_date");
     if (ngx_http_variable_unknown_header(val, &h_date, &r->headers_in.headers.part, sizeof("http_")-1) == NGX_OK) {
         if (val->not_found == 0) {
@@ -628,7 +833,7 @@ ngx_http_aws_auth_variable_s3(ngx_http_request_t *r, ngx_http_variable_value_t *
     if (el_sign == NULL) {
         return NGX_ERROR;
     }
-    ngx_http_aws_auth_get_canon_headers(r, el_sign);
+    ngx_http_aws_auth_get_canon_headers(r, el_sign, 1);
     lenall += el_sign->len;
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "normalized: %V", el_sign);
 
@@ -684,6 +889,7 @@ ngx_http_aws_auth_variable_s3(ngx_http_request_t *r, ngx_http_variable_value_t *
     v->valid = 1;
     v->no_cacheable = 0;
     v->not_found = 0;
+
     return NGX_OK;
 }
 

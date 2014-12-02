@@ -10,8 +10,11 @@ Implements proxying of authenticated requests to S3.
     location /fw-pub-pkgs {
       proxy_pass https://s3.amazonaws.com; #also works with HTTP
 
-      inbound_aws_access_key 01234567890123456789;
-      inbound_aws_secret_key 0123456789012345678901234567890123456789;
+      inbound_aws_access_key1 0123456789;
+      inbound_aws_secret_key1 012345678901234567890;
+
+      inbound_aws_access_key2 01234567890123456789;
+      inbound_aws_secret_key2 0123456789012345678901234567890123456789;
 
       aws_access_key INSERT_ACCESSKEY_HERE;
       aws_secret_key INSERT_SECRETKEY_HERE;
@@ -21,9 +24,7 @@ Implements proxying of authenticated requests to S3.
       proxy_set_header Authorization $s3_auth_token;
       proxy_set_header x-amz-date $aws_date;
       #proxy_set_header x-amz-security-token $aws_token;
-
-  }
-
+    }
   }
 ```
 

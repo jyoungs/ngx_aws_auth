@@ -30,8 +30,10 @@ typedef struct {
     ngx_str_t access_key;
     ngx_str_t secret;
 
-    ngx_str_t inbound_access_key;
-    ngx_str_t inbound_secret;
+    ngx_str_t inbound_access_key1;
+    ngx_str_t inbound_secret1;
+    ngx_str_t inbound_access_key2;
+    ngx_str_t inbound_secret2;
 
     ngx_str_t security_token;
     ngx_str_t s3_bucket;
@@ -82,18 +84,32 @@ static ngx_command_t  ngx_http_aws_auth_commands[] = {
       offsetof(ngx_http_aws_auth_conf_t, secret),
       NULL },
 
-    { ngx_string("inbound_aws_access_key"),
+    { ngx_string("inbound_aws_access_key1"),
       NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
       ngx_conf_set_str_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
-      offsetof(ngx_http_aws_auth_conf_t, inbound_access_key),
+      offsetof(ngx_http_aws_auth_conf_t, inbound_access_key1),
       NULL },
 
-    { ngx_string("inbound_aws_secret_key"),
+    { ngx_string("inbound_aws_secret_key1"),
       NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
       ngx_conf_set_str_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
-      offsetof(ngx_http_aws_auth_conf_t, inbound_secret),
+      offsetof(ngx_http_aws_auth_conf_t, inbound_secret1),
+      NULL },
+
+    { ngx_string("inbound_aws_access_key2"),
+      NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_aws_auth_conf_t, inbound_access_key2),
+      NULL },
+
+    { ngx_string("inbound_aws_secret_key2"),
+      NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_str_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_aws_auth_conf_t, inbound_secret2),
       NULL },
 
     { ngx_string("aws_security_token"),
@@ -250,8 +266,10 @@ ngx_http_aws_auth_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
 
     ngx_conf_merge_str_value(conf->access_key, prev->access_key, "");
     ngx_conf_merge_str_value(conf->secret, prev->secret, "");
-    ngx_conf_merge_str_value(conf->inbound_access_key, prev->inbound_access_key, "");
-    ngx_conf_merge_str_value(conf->inbound_secret, prev->inbound_secret, "");
+    ngx_conf_merge_str_value(conf->inbound_access_key1, prev->inbound_access_key1, "");
+    ngx_conf_merge_str_value(conf->inbound_secret1, prev->inbound_secret1, "");
+    ngx_conf_merge_str_value(conf->inbound_access_key2, prev->inbound_access_key2, "");
+    ngx_conf_merge_str_value(conf->inbound_secret2, prev->inbound_secret2, "");
     ngx_conf_merge_str_value(conf->chop_prefix, prev->chop_prefix, "");
 
     return NGX_CONF_OK;
@@ -322,7 +340,7 @@ ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr, _B
     }
 
     //Add x-amz-date to the header list
-    //Expect to do this to generate the forward reqest, but not valiidating inbound requests
+    //Expect to do this to generate the forward request, but not validating inbound requests
     if( add_amz_date ) {
         h = ngx_array_push(v);
         if (h == NULL) {
@@ -355,8 +373,6 @@ ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr, _B
         h->value.len = aws_conf->security_token.len;
         lenall += h->key.len + h->value.len + 2;
     }
-    /* JYOUNGS END */
-
 
     ngx_qsort(v->elts, (size_t) v->nelts, sizeof(ngx_table_elt_t), ngx_http_cmp_hnames);
 
@@ -642,7 +658,6 @@ validate_original_auth(ngx_http_request_t *r, ngx_http_variable_value_t *v, uint
     }
     //Still adding new line...
     ngx_http_aws_auth_sgn_newline(to_sign);
-    // JYOUNGS: Since we are always going to include x-amz-date - this shouldn't be part of the signature
 
     ngx_str_t h_date = ngx_string("http_date");
     if (ngx_http_variable_unknown_header(val, &h_date, &r->headers_in.headers.part, sizeof("http_")-1) == NGX_OK) {
@@ -657,7 +672,6 @@ validate_original_auth(ngx_http_request_t *r, ngx_http_variable_value_t *v, uint
             lenall += el_sign->len;
         }
     }
-    //*/
 
     ngx_http_aws_auth_sgn_newline(to_sign);
 
@@ -688,7 +702,6 @@ validate_original_auth(ngx_http_request_t *r, ngx_http_variable_value_t *v, uint
 
     ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,"String to sign:%s",str_to_sign);
 
-
     if (evp_md==NULL)
     {
        evp_md = EVP_sha1();
@@ -697,7 +710,7 @@ validate_original_auth(ngx_http_request_t *r, ngx_http_variable_value_t *v, uint
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
                        "aws string being signed BEGIN:\n%s\naws string being signed END", str_to_sign);
 
-    HMAC(evp_md, aws_conf->inbound_secret.data, aws_conf->inbound_secret.len, str_to_sign, ngx_strlen(str_to_sign), md, &md_len);
+    HMAC(evp_md, aws_conf->inbound_secret1.data, aws_conf->inbound_secret1.len, str_to_sign, ngx_strlen(str_to_sign), md, &md_len);
 
     BIO* b64 = BIO_new(BIO_f_base64());
     BIO* bmem = BIO_new(BIO_s_mem());  
@@ -707,25 +720,49 @@ validate_original_auth(ngx_http_request_t *r, ngx_http_variable_value_t *v, uint
     BUF_MEM *bptr; 
     BIO_get_mem_ptr(b64, &bptr);
 
+    //Calculating the second keys signiture before overwriting str_to_sign, pretty ugly
+    HMAC(evp_md, aws_conf->inbound_secret2.data, aws_conf->inbound_secret2.len, str_to_sign, ngx_strlen(str_to_sign), md, &md_len);
+
     ngx_memcpy(str_to_sign, bptr->data, bptr->length-1);
     str_to_sign[bptr->length-1]='\0';
 
     BIO_free_all(b64);
 
-    u_char *signature = ngx_palloc(r->pool,100 + aws_conf->inbound_access_key.len);
-    ngx_sprintf(signature, "AWS %V:%s%Z", &aws_conf->inbound_access_key, str_to_sign);
-    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,"Validation Signature: %s",signature);
+    u_char *signature = ngx_palloc(r->pool,100 + aws_conf->inbound_access_key1.len);
+    ngx_sprintf(signature, "AWS %V:%s%Z", &aws_conf->inbound_access_key1, str_to_sign);
+    ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,"Validation Signature 1: %s",signature);
 
+    if(ngx_strcasecmp(inbound_auth->data, signature) != 0){
+        BIO* b64 = BIO_new(BIO_f_base64());
+        BIO* bmem = BIO_new(BIO_s_mem());
+        b64 = BIO_push(b64, bmem);
+        BIO_write(b64, md, md_len);
+        (void)BIO_flush(b64);
+        BUF_MEM *bptr;
+        BIO_get_mem_ptr(b64, &bptr);
+
+        ngx_memcpy(str_to_sign, bptr->data, bptr->length-1);
+        str_to_sign[bptr->length-1]='\0';
+
+        BIO_free_all(b64);
+
+        u_char *signature = ngx_palloc(r->pool,100 + aws_conf->inbound_access_key2.len);
+        ngx_sprintf(signature, "AWS %V:%s%Z", &aws_conf->inbound_access_key2, str_to_sign);
+        ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,"Validation Signature 2: %s",signature);
+
+        if(ngx_strcasecmp(inbound_auth->data, signature) != 0){
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,"Validation signature (2) is not correct");
+            return NGX_ERROR;
+        }
+    }
+
+    /*
     v->len = ngx_strlen(signature);
     v->data = signature;
     v->valid = 1;
     v->no_cacheable = 0;
     v->not_found = 0;
-
-    if(ngx_strcasecmp(inbound_auth->data, signature) != 0){
-        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,"Validation signature is not correct");
-        return NGX_ERROR;
-    }
+    */
 
     return NGX_OK;    
 }

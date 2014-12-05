@@ -331,7 +331,8 @@ ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr, _B
 
         if (ngx_strncasecmp(header[i].key.data, (u_char *) "x-amz-",  sizeof("x-amz-") - 1) == 0) {
             //Add this header below for the outbound request
-            if ( !update_for_outbound || ngx_strncasecmp(header[i].key.data, (u_char *) "x-amz-date",  sizeof("x-amz-date") - 1) != 0) {
+            if ( !update_for_outbound || ( ngx_strncasecmp(header[i].key.data, (u_char *) "x-amz-date",  sizeof("x-amz-date") - 1) != 0 && 
+              ngx_strncasecmp(header[i].key.data, (u_char *) "x-amz-security-token",  sizeof("x-amz-security-token") - 1) != 0 ) ) {
                 h = ngx_array_push(v);
                 if (h == NULL) {
                     return NGX_ERROR;

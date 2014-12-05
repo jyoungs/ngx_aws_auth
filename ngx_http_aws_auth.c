@@ -330,24 +330,24 @@ ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr, _B
         }
 
         if (ngx_strncasecmp(header[i].key.data, (u_char *) "x-amz-",  sizeof("x-amz-") - 1) == 0) {
-	  //Add this header below for the outbound request
-	  if ( !update_for_outbound || ngx_strncasecmp(header[i].key.data, (u_char *) "x-amz-date",  sizeof("x-amz-date") - 1) != 0) {
-	    h = ngx_array_push(v);
-            if (h == NULL) {
-                return NGX_ERROR;
+            //Add this header below for the outbound request
+            if ( !update_for_outbound || ngx_strncasecmp(header[i].key.data, (u_char *) "x-amz-date",  sizeof("x-amz-date") - 1) != 0) {
+                h = ngx_array_push(v);
+                if (h == NULL) {
+                    return NGX_ERROR;
+                }
+                h->key.data = ngx_palloc(r->pool, header[i].key.len);
+                for (ch = 0; ch < header[i].key.len; ch++) {
+                    h->key.data[ch] = ngx_tolower(header[i].key.data[ch]);
+                }
+                h->key.len  = header[i].key.len;
+                h->value.data  = header[i].value.data;
+                h->value.len  = header[i].value.len;
+                lenall += h->key.len + h->value.len + 2;
+                ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                    "x-amz header key: %V; val: %V ",&h->key, &h->value);
+                continue;
             }
-            h->key.data = ngx_palloc(r->pool, header[i].key.len);
-            for (ch = 0; ch < header[i].key.len; ch++) {
-                h->key.data[ch] = ngx_tolower(header[i].key.data[ch]);
-            }
-            h->key.len  = header[i].key.len;
-            h->value.data  = header[i].value.data;
-            h->value.len  = header[i].value.len;
-            lenall += h->key.len + h->value.len + 2;
-            ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
-                "x-amz header key: %V; val: %V ",&h->key, &h->value);
-            continue;
-	  }
         }
     }
 

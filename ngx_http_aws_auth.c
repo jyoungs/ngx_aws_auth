@@ -330,7 +330,9 @@ ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr, _B
         }
 
         if (ngx_strncasecmp(header[i].key.data, (u_char *) "x-amz-",  sizeof("x-amz-") - 1) == 0) {
-            h = ngx_array_push(v);
+	  //Add this header below for the outbound request
+	  if ( !update_for_outbound || ngx_strncasecmp(header[i].key.data, (u_char *) "x-amz-date",  sizeof("x-amz-date") - 1) != 0) {
+	    h = ngx_array_push(v);
             if (h == NULL) {
                 return NGX_ERROR;
             }
@@ -345,6 +347,7 @@ ngx_http_aws_auth_get_canon_headers(ngx_http_request_t *r, ngx_str_t *retstr, _B
             ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
                 "x-amz header key: %V; val: %V ",&h->key, &h->value);
             continue;
+	  }
         }
     }
 
